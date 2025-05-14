@@ -1,22 +1,76 @@
-import 'package:device_preview/device_preview.dart';
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:device_preview/device_preview.dart';
 import 'barcode_scanner_view.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
-  runApp(MyApp());
- //runApp(DevicePreview(enabled: true, builder: (context) => MyApp()));
+// Global list of cameras
+List<CameraDescription> cameras = [];
+
+// Singleton Service for Camera
+class CameraService {
+  static final CameraService _instance = CameraService._internal();
+  factory CameraService() => _instance;
+  CameraService._internal();
+
+  late CameraController cameraController;
+
+  Future<void> initializeCamera() async {
+    try {
+      if (cameras.isEmpty) {
+        cameras = await availableCameras();
+      }
+
+      // Pick back camera by default
+      final backCamera = cameras.firstWhere(
+            (camera) => camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      cameraController = CameraController(
+        backCamera,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
+
+      await cameraController.initialize();
+      await cameraController.startImageStream((image) {});
+    } catch (e) {
+      debugPrint("Error initializing camera: $e");
+    }
+  }
+
+  Future<void> disposeCamera() async {
+    await cameraController.stopImageStream();
+    await cameraController.dispose();
+  }
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize camera early
+  await CameraService().initializeCamera();
+
+  final prefs = await SharedPreferences.getInstance();
+  final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+
+  runApp(MyApp(isLoggedIn: isLoggedIn));
 }
 
 class MyApp extends StatelessWidget {
+  final bool isLoggedIn;
+
+  const MyApp({super.key, required this.isLoggedIn});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: LoginPage(),
+      home: isLoggedIn ? const BarcodeScannerView() : LoginPage(),
     );
   }
 }
-
 class LoginPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -133,7 +187,9 @@ class LoginPage extends StatelessWidget {
 
               // Guest Button
               ElevatedButton(
-                onPressed: () {
+                onPressed: () async {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('isLoggedIn', true);
                   Navigator.push(
                     context,
                     MaterialPageRoute(

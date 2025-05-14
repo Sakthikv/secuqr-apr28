@@ -25,6 +25,9 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+// Import global CameraService
+import 'main.dart'; // Adjust path based on your folder structure
+
 class BarcodeScannerView extends StatefulWidget {
   const BarcodeScannerView({super.key});
 
@@ -42,7 +45,6 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
   String? _text;
   CameraLensDirection _cameraLensDirection = CameraLensDirection.back;
   double _barcodeSize = 0;
-  CameraController? _cameraController;
   Size? _cameraSize;
   Timer? _captureTimer;
   Timer? _resetZoomTimer;
@@ -61,17 +63,19 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
   String str3 = " ";
   bool _isReinitializing = false;
   StreamSubscription? _accelerometerSubscription;
-  bool _isLoading = false; // Track loading state
-  bool _cameraPause=false;
-  late BuildContext loadingDialogContext; // capture loading dialog context
+  bool _isLoading = false;
+  bool _cameraPause = false;
+  late BuildContext loadingDialogContext;
   bool _isButtonDisabled = false;
 
+  late CameraService _cameraService;
+  CameraController? _cameraController;
 
   @override
   void initState() {
     super.initState();
     _resetState();
-    _initializeCamera();
+    _initializeGlobalCamera(); // Initialize global camera
     _startResetZoomTimer();
     _startAccelerometerListener();
   }
@@ -88,49 +92,23 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
     isZooming = false;
     _qrCodeState = QRCodeState.waiting;
     _isLoading = false;
-    _cameraPause=false;
+    _cameraPause = false;
   }
 
-  Future<void> _initializeCamera() async {
-    if (_isLoading) return;
-    setState(() => _isLoading = true);
-    try {
-      await _disposeCamera();
-      final cameras = await availableCameras();
-      if (cameras.isNotEmpty) {
-        _cameraController = CameraController(
-          cameras.first,
-          ResolutionPreset.high,
-          enableAudio: false,
-        );
-        await _cameraController!.initialize();
-        await _cameraController!.setFlashMode(FlashMode.off);
-        await _cameraController!.setExposureMode(ExposureMode.locked);
-        try {
-          await _cameraController!.setFocusMode(FocusMode.auto);
-        } catch (e) {
-          if (kDebugMode) print("Auto focus is not supported on this camera: $e");
-        }
-        if (mounted) {
-          setState(() {
-            _isCameraInitialized = true;
-            _isLoading = false;
-          });
-        }
-      } else {
-        if (kDebugMode) print("No cameras found");
-        setState(() => _isLoading = false);
-      }
-    } catch (e) {
-      if (kDebugMode) print('Error initializing camera: $e');
-      setState(() => _isLoading = false);
-    }
-  }
+  Future<void> _initializeGlobalCamera() async {
+    _cameraService = CameraService(); // Get singleton instance
+    _cameraController = _cameraService.cameraController;
 
-  Future<void> _disposeCamera() async {
-    if (_cameraController != null) {
-      await _cameraController!.dispose();
-      _cameraController = null;
+    if (_cameraController != null && _cameraController!.value.isInitialized) {
+      setState(() {
+        _isCameraInitialized = true;
+      });
+    } else {
+      await _cameraService.initializeCamera(); // Fallback in case not initialized
+      setState(() {
+        _isCameraInitialized = true;
+        _cameraController = _cameraService.cameraController;
+      });
     }
   }
 
@@ -140,7 +118,6 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
     final List<double> deltaZHistory = [];
     const int smoothingWindow = 15;
     const double stabilityThreshold = 1.5;
-
     _accelerometerSubscription = accelerometerEvents.listen((AccelerometerEvent event) {
       if (!mounted) return;
       final deltaX = (event.x - lastX).abs();
@@ -214,7 +191,8 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
     });
   }
 
-  Future<void> _smoothZoomTo(double targetZoomLevel, Size screenSize, {Duration duration = const Duration(milliseconds: 400)}) async {
+  Future<void> _smoothZoomTo(double targetZoomLevel, Size screenSize,
+      {Duration duration = const Duration(milliseconds: 400)}) async {
     int steps = (duration.inMilliseconds / 16).round();
     double zoomIncrement = (targetZoomLevel - currentZoomLevel) / steps;
     for (int i = 0; i < steps; i++) {
@@ -269,14 +247,12 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
     _captureTimer?.cancel();
     _resetZoomTimer?.cancel();
     _canProcess = false;
-    _cameraPause=false;
     _barcodeScanner.close();
-    _disposeCamera();
+
+    // Don't dispose camera here
     _accelerometerSubscription?.cancel();
     super.dispose();
   }
-
-  @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
     return Scaffold(
@@ -301,9 +277,7 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
             )
                 : const Center(child: CircularProgressIndicator()),
             if (_isLoading)
-              const Center(
-                child: CircularProgressIndicator(),
-              ),
+              const Center(child: CircularProgressIndicator()),
           ],
         ),
       ),
@@ -318,7 +292,16 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
                 onTap: () {
                   Navigator.pushAndRemoveUntil(
                     context,
-                    MaterialPageRoute(builder: (context) => HomePage()),
+                    PageRouteBuilder(
+                      pageBuilder: (_, __, ___) => HomePage(),
+                      transitionDuration: const Duration(milliseconds: 3),
+                      transitionsBuilder: (_, animation, __, child) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        );
+                      },
+                    ),
                         (route) => false,
                   );
                 },
@@ -326,10 +309,7 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(FontAwesomeIcons.clock),
-                    Text(
-                      "History",
-                      style: TextStyle(fontSize: 10),
-                    ),
+                    Text("History", style: TextStyle(fontSize: 10)),
                   ],
                 ),
               ),
@@ -352,14 +332,13 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
                   Navigator.pushAndRemoveUntil(
                     context,
                     PageRouteBuilder(
-                      pageBuilder: (context, animation, secondaryAnimation) => ProfileApp(),
-                      transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                        const begin = Offset(1.0, 0.0);
-                        const end = Offset.zero;
-                        const curve = Curves.easeInOut;
-                        var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-                        var offsetAnimation = animation.drive(tween);
-                        return SlideTransition(position: offsetAnimation, child: child);
+                      pageBuilder: (_, __, ___) => ProfileApp(),
+                      transitionDuration: const Duration(milliseconds: 20),
+                      transitionsBuilder: (_, animation, __, child) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        );
                       },
                     ),
                         (route) => false,
@@ -369,10 +348,7 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(FontAwesomeIcons.link),
-                    Text(
-                      "Connect",
-                      style: TextStyle(fontSize: 10),
-                    ),
+                    Text("Connect", style: TextStyle(fontSize: 10)),
                   ],
                 ),
               ),
@@ -384,17 +360,20 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
   }
 
   Future<void> _processImage(InputImage inputImage, Size screenSize) async {
-    if (!_canProcess || _isBusy || _isCapturing||_cameraPause) return;
+    if (!_canProcess || _isBusy || _isCapturing || _cameraPause) return;
     _isBusy = true;
     setState(() {
       _text = '';
     });
+
     try {
       final barcodes = await _barcodeScanner.processImage(inputImage);
+
       if (barcodes.isNotEmpty) {
         _cancelResetZoomTimer();
         _lastQRCodeDetectedTime = DateTime.now();
       }
+
       if (inputImage.metadata?.size != null && inputImage.metadata?.rotation != null) {
         final painter = BarcodeDetectorPainter(
           barcodes,
@@ -458,18 +437,14 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
 
   void _cancelResetZoomTimer() {
     _resetZoomTimer?.cancel();
-    _resetZoomTimer = Timer(Duration(minutes: 1), _resetZoomLevel);
   }
 
   void _startResetZoomTimer() {
-    _resetZoomTimer = Timer.periodic(
-      const Duration(seconds: 10),
-          (_) {
-        if (!_isCapturing) {
-          _resetZoomLevel();
-        }
-      },
-    );
+    _resetZoomTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!_isCapturing) {
+        _resetZoomLevel();
+      }
+    });
   }
 
   void _resetZoomLevel() async {
@@ -482,9 +457,12 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
   }
 
   void _startScanning() {
+    _cameraController!.setFlashMode(FlashMode.off);
+    _resetZoomLevel();
     if (_isLoading || _isReinitializing) return;
 
     setState(() {
+
       _isLoading = true;
       _isCapturing = false;
       isDialogVisible = false;
@@ -493,146 +471,53 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
       _isButtonDisabled = false;
     });
 
-    // Cancel all ongoing operations
     _captureTimer?.cancel();
     _resetZoomTimer?.cancel();
     _resetState();
 
-    _reinitializeCamera().then((_) {
-      if (mounted) {
-        setState(() {
-          _isCameraInitialized = true;
-          _isReinitializing = false;
-          _isLoading = false;
-          _cameraPause = false;
-          _isButtonDisabled = false;
-        });
-      }
-    }).catchError((error) {
-      if (mounted) {
-        setState(() {
-          _isReinitializing = false;
-          _isLoading = false;
-          _cameraPause = false;
-          _isButtonDisabled = false;
-        });
-      }
+    if (mounted) {
+      setState(() {
+        _isCameraInitialized = true;
+        _isReinitializing = false;
+        _isLoading = false;
+        _cameraPause = false;
+        _isButtonDisabled = false;
+        _qrCodeState = QRCodeState.waiting;
+      });
+    }
 
-      if (error is TimeoutException) {
-        _showRetryDialog("Camera timed out while initializing. Please try again.");
-      } else if (error.toString().contains('No cameras found')) {
-        _showErrorDialog("No camera available on this device.");
-      } else {
-        _showRetryDialog("Failed to initialize camera. Please try again.");
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _cameraController?.resumePreview();
       }
     });
   }
 
-  Future<void> _reinitializeCamera() async {
-    try {
-      if (_cameraController != null) {
-        await _cameraController!.dispose();
-      }
-
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        throw Exception("No cameras found");
-      }
-
-      _cameraController = CameraController(
-        cameras.first,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
-
-      await _cameraController!
-          .initialize()
-          .timeout(const Duration(seconds: 10));
-
-      await _cameraController!.setFlashMode(FlashMode.off);
-      await _cameraController!.setExposureMode(ExposureMode.locked);
-
-      try {
-        await _cameraController!.setFocusMode(FocusMode.auto);
-      } catch (e) {
-        if (kDebugMode) {
-          print("Auto focus not supported: $e");
-        }
-      }
-    } catch (e) {
-      throw e; // Always rethrow for _startScanning to handle
-    }
-  }
-
-  void _showRetryDialog(String message) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          title: const Text('Camera Error'),
-          content: Text(message),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Retry'),
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(
-                      builder: (context) => const BarcodeScannerView()),
-                      (route) => false,
-                );
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showErrorDialog(String message) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          title: const Text('Camera Error'),
-          content: Text(message),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('OK'),
-              onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-                _navigateBackToScanner();
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-
-
   Future<void> _captureImage(Rect? barcodeRect) async {
-    if (_isCapturing || _cameraController == null || !_cameraController!.value.isInitialized || isZooming || isShaking) {
+    if (_cameraPause ||
+        _isCapturing ||
+        _cameraController == null ||
+        !_cameraController!.value.isInitialized ||
+        isZooming ||
+        isShaking) {
       return;
     }
+
     try {
       if (isShaking) {
         showTopSnackbar(context, "Waiting for camera to stabilize...");
         _checkStabilityBeforeResuming();
       }
+
       setState(() {
         _customPaint = null;
       });
+
       if (isZooming) {
         showTopSnackbar(context, "Waiting for zoom to stabilize...");
         return;
       }
+
       if (_barcodeSize > 42000) {
         if (mounted) {
           _cameraController?.setZoomLevel(currentZoomLevel - 0.5);
@@ -640,14 +525,15 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
         }
         return;
       }
+
       _setFixedFocus(barcodeRect);
+
       final XFile image = await _cameraController!.takePicture();
       final Uint8List imageBytes = await image.readAsBytes();
-      final String tempPath = (await getTemporaryDirectory()).path;
-      final File imageFile = File('$tempPath/temp_image.png');
-      await imageFile.writeAsBytes(imageBytes);
-      final inputImage = InputImage.fromFilePath(imageFile.path);
+
+      final inputImage = InputImage.fromFilePath(image.path);
       final List barcodes = await _barcodeScanner.processImage(inputImage);
+
       if (barcodes.isEmpty && _isCapturing) {
         if (mounted) {
           showTopSnackbar(context, "QR code not detected. Adjust your position.");
@@ -658,44 +544,29 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
         });
         return;
       }
+
       if (mounted) {
         final Barcode qrCode = barcodes.first;
         final Rect boundingBox = qrCode.boundingBox;
         final img.Image? originalImage = img.decodeImage(imageBytes);
+
         if (originalImage != null) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (BuildContext dialogContext) {
-              loadingDialogContext = dialogContext; // capture
-              return AlertDialog(
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: const [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 16),
-                    Text("Cropping QR Code..."),
-                  ],
-                ),
-              );
-            },
-          );
           try {
-            _cameraController?.pausePreview();
-            if(mounted){
+            await _cameraController?.pausePreview();
+            if (mounted) {
               setState(() {
-                _cameraPause=false;
+                _cameraPause = true;
               });
             }
-            if (!isDialogVisible) {
-              await Future.delayed(const Duration(seconds: 1));
-            }
+
             final int cropX = boundingBox.left.toInt();
             final int cropY = boundingBox.top.toInt();
             final int cropWidth = boundingBox.width.toInt();
             final int cropHeight = boundingBox.height.toInt();
+
             final int adjustedX = cropX.clamp(0, originalImage.width - cropWidth);
             final int adjustedY = cropY.clamp(0, originalImage.height - cropHeight);
+
             final img.Image croppedImage = img.copyCrop(
               originalImage,
               x: adjustedX - 35,
@@ -703,28 +574,21 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
               width: cropWidth + 70,
               height: cropHeight + 70,
             );
+
             final img.Image resizedImage = img.copyResize(croppedImage, width: 500, height: 500);
             _croppedImageBytes = Uint8List.fromList(img.encodePng(resizedImage));
-          } catch (e) {
-            if (kDebugMode) print('Error during cropping: $e');
-            // Close the loading dialog safely
-            if (Navigator.canPop(loadingDialogContext)) {
-              Navigator.pop(loadingDialogContext);
-            }
 
-            showTopSnackbar(context, "Failed to crop the QR code. Please try again.");
+          } catch (e) {
+            showTopSnackbar(context, "Failed to crop QR code. Try again.");
             _startScanning();
             return;
-          }
-          // Close the loading dialog safely
-          if (Navigator.canPop(loadingDialogContext)) {
-            Navigator.pop(loadingDialogContext);
           }
 
           if (_croppedImageBytes != null && !isDialogVisible) {
             setState(() {
               isDialogVisible = true;
             });
+
             showDialog(
               context: context,
               barrierDismissible: false,
@@ -746,69 +610,38 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(6),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    spreadRadius: 1,
-                                    blurRadius: 4,
-                                    offset: const Offset(2, 2),
-                                  ),
-                                ],
+                            ElevatedButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                sendImageToApi(_croppedImageBytes!);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: Colors.black,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                elevation: 0,
                               ),
-                              child: ElevatedButton(
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                  sendImageToApi(_croppedImageBytes!);
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  elevation: 0,
-                                ),
-                                child: const Text("OK"),
-                              ),
+                              child: const Text("OK"),
                             ),
                             const SizedBox(width: 10),
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(6),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.2),
-                                    spreadRadius: 1,
-                                    blurRadius: 4,
-                                    offset: const Offset(2, 2),
-                                  ),
-                                ],
+                            ElevatedButton.icon(
+                              onPressed: _isButtonDisabled
+                                  ? null
+                                  : () {
+                                setState(() {
+                                  _isButtonDisabled = true;
+                                });
+                                Navigator.of(context).pop();
+                                _startScanning();
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: Colors.black,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                elevation: 0,
                               ),
-                              child: ElevatedButton.icon(
-                                onPressed: _isButtonDisabled ? null : () {
-                                  setState(() {
-                                    _isButtonDisabled = true; // Disable button immediately
-                                  });
-                                  Navigator.of(context).pop();
-                                  _startScanning();
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: Colors.black,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  elevation: 0,
-                                ),
-                                icon: const Icon(Icons.camera_alt, color: Color(0xFF0092B4)),
-                                label: const Text("Scan Again"),
-                              ),
-
+                              icon: const Icon(Icons.camera_alt, color: Color(0xFF0092B4)),
+                              label: const Text("Scan Again"),
                             ),
                           ],
                         ),
@@ -830,17 +663,23 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
     } catch (e) {
       if (kDebugMode) print('Error capturing image: $e');
     } finally {
+      if (_cameraController != null && !_cameraController!.value.isStreamingImages) {
+        await _cameraController?.resumePreview();
+      }
       setState(() {
         _isCapturing = false;
+        _cameraPause = false;
       });
     }
   }
 
   Future<void> _setFixedFocus(Rect? barcodeRect) async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized||_cameraPause) {
+    print("\n focussss........................ ${_cameraPause}\n");
+    if (_cameraPause ||_cameraController == null || !_cameraController!.value.isInitialized) {
       if (kDebugMode) print('Camera controller not initialized or null.');
       return;
     }
+
     try {
       Offset focusPoint = const Offset(0.5, 0.5);
       if (barcodeRect != null) {
@@ -860,21 +699,22 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
           return;
         }
       }
-      _cameraController!.setFocusMode(FocusMode.auto);
-      _cameraController!.setFocusPoint(focusPoint);
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (kDebugMode) print('Focus set successfully to: $focusPoint');
-      await Future.delayed(const Duration(milliseconds: 300));
-      try {
-        await _cameraController!.setFocusPoint(focusPoint);
-      } catch (e) {
-        if (kDebugMode) print('Retry focus failed: $e');
+      if(!_cameraPause) {
+        _cameraController!.setFocusMode(FocusMode.auto);
+        _cameraController!.setFocusPoint(focusPoint);
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (kDebugMode) print('Focus set successfully to: $focusPoint');
+        await Future.delayed(const Duration(milliseconds: 300));
+        try {
+          await _cameraController!.setFocusPoint(focusPoint);
+        } catch (e) {
+          if (kDebugMode) print('Retry focus failed: $e');
+        }
       }
     } catch (e) {
       if (kDebugMode) print('Error setting fixed focus: $e');
     }
   }
-
   void _startCaptureTimer(Rect? barcodeRect) {
     _captureTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (_isCapturing || isZooming || isShaking||_cameraPause) return;
@@ -888,6 +728,7 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
       _captureImage(barcodeRect);
     });
   }
+
 
   Future<void> sendImageToApi(Uint8List imageBytes) async {
     Navigator.of(context).push(PageRouteBuilder(
@@ -905,7 +746,7 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
               children: [
                 const CircularProgressIndicator(),
                 const SizedBox(height: 16),
-                Text("Fetching...", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+                Text("validating...", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
               ],
             ),
           ),
@@ -975,24 +816,80 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
               return _buildResultContentDialog(context, binObjBytes);
             },
           );
-        } else {
-          showTopSnackbar(context, "Network Issues");
-          _startScanning();
+        }
+        else if (status==0) {
+          await saveScanToSharedPreferences(
+              statusLabel, scndDtm, imageBytes);
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (BuildContext context) {
+              return _buildResultContentDialog(context, imageBytes);
+            },
+          );
+        }
+
+        else {
+          //_showRetryDialog("It was likely a network issue or a problem with the API call.");
+          // showTopSnackbar(context, "Network Issues");
+          // _startScanning();
+          _showRetryDialog("Something went wrong. Please try again.");
           //_navigateBackToScanner();
         }
       } else {
-        showTopSnackbar(context, "Network Issues");
-        _startScanning();
+        // showTopSnackbar(context, "Network Issues");
+        // _startScanning();
+        _showRetryDialog("Network issue detected. Please try again.");
         // _navigateBackToScanner();
       }
     } catch (e) {
       print('API Error: $e');
-      showTopSnackbar(context, "Network Issues");
-      Navigator.of(context).pop();
-      _startScanning();
+      // showTopSnackbar(context, "Network Issues");
+      // Navigator.of(context).pop();
+      // _startScanning();
+      _showRetryDialog("Unable to reach server. Please check your internet connection.");
       //_navigateBackToScanner();
     }
   }
+
+  // _showRetryDialog("Something went wrong. Please try again.");
+  //_showRetryDialog("Network issue detected. Please try again.");
+  // _showRetryDialog("Unable to reach server. Please check your internet connection.");
+  void _showRetryDialog(String errorMessage) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text("Error"),
+        content: Text(errorMessage),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              _startScanning();
+              //_resumeCameraPreview(); // Resume scanning
+            },
+            child: const Text("Retry"),
+          )
+        ],
+      ),
+    );
+  }
+  // Future<void> _resumeCameraPreview() async {
+  //   if (_cameraController != null && _cameraController!.value.isInitialized) {
+  //     if (_cameraPause) {
+  //       await _cameraController?.resumePreview();
+  //       setState(() {
+  //         _cameraPause = false;
+  //         _isCapturing = false;
+  //         isZooming = false;
+  //         isDialogVisible = false;
+  //         _qrCodeState = QRCodeState.waiting;
+  //       });
+  //     }
+  //   }
+  // }
 
   Future<String> _getCurrentLocation() async {
     try {
@@ -1076,7 +973,7 @@ class _BarcodeScannerViewState extends State<BarcodeScannerView> {
                 child: Text(
                   resultTitle,
                   textAlign: TextAlign.left,
-                  style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: resultColor),
+                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: resultColor),
                 ),
               ),
             ],

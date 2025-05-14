@@ -6,6 +6,7 @@ import 'package:secuqr1/profile.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'FAQs_page.dart';
+import 'barcode_scanner_view.dart';
 
 class userProfilePage extends StatefulWidget {
   @override
@@ -91,6 +92,18 @@ class _userProfilePageState extends State<userProfilePage> {
             onPressed: _editName,
           ),
         ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back), // Back button icon
+          onPressed: () {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const BarcodeScannerView(),
+              ),
+                  (route) => false,
+            );
+          },
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),

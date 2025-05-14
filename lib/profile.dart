@@ -205,7 +205,16 @@ class ProfilePage extends StatelessWidget {
                 onTap: () {
                   Navigator.pushAndRemoveUntil(
                     context,
-                    MaterialPageRoute(builder: (context) => HomePage()),
+                    PageRouteBuilder(
+                      pageBuilder: (_, __, ___) => HomePage(),
+                      transitionDuration: const Duration(milliseconds: 3),
+                      transitionsBuilder: (_, animation, __, child) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        );
+                      },
+                    ),
                         (route) => false,
                   );
                 },
@@ -230,15 +239,24 @@ class ProfilePage extends StatelessWidget {
                   ),
                   child: IconButton(
                     icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-                    onPressed: () {
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const BarcodeScannerView(),
-                        ),
-                            (route) => false,
-                      );
-                    },
+                      onPressed: () {
+
+
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          PageRouteBuilder(
+                            pageBuilder: (_, __, ___) => BarcodeScannerView(),
+                            transitionDuration: const Duration(milliseconds: 3),
+                            transitionsBuilder: (_, animation, __, child) {
+                              return FadeTransition(
+                                opacity: animation,
+                                child: child,
+                              );
+                            },
+                          ),
+                              (route) => false,
+                        );
+                      }
                   ),
                 ),
               ),

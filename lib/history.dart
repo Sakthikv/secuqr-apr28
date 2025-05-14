@@ -346,18 +346,13 @@ class _HomePageState extends State<HomePage> {
                   Navigator.pushAndRemoveUntil(
                     context,
                     PageRouteBuilder(
-                      pageBuilder: (context, animation, secondaryAnimation) =>
-                          ProfileApp(),
-                      transitionsBuilder: (context, animation,
-                          secondaryAnimation, child) {
-                        const begin = Offset(1.0, 0.0);
-                        const end = Offset.zero;
-                        const curve = Curves.easeInOut;
-                        var tween = Tween(begin: begin, end: end).chain(
-                            CurveTween(curve: curve));
-                        var offsetAnimation = animation.drive(tween);
-                        return SlideTransition(
-                            position: offsetAnimation, child: child);
+                      pageBuilder: (_, __, ___) => ProfileApp(),
+                      transitionDuration: const Duration(milliseconds: 20),
+                      transitionsBuilder: (_, animation, __, child) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        );
                       },
                     ),
                         (route) => false,
